@@ -1,0 +1,12 @@
+node_modules
+.next
+.env
+*.db
+*.db-shm
+*.db-wal
+uploads/
+tests/.tmp-uploads/
+playwright-report/
+test-results/
+next-env.d.ts
+*.tsbuildinfo

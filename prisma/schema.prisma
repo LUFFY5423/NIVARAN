@@ -1,0 +1,303 @@
+// REFERENCE MODEL: the runtime schema is src/server/db/schema.sql (Prisma engines could not be
+// downloaded in the build sandbox). This file is the migration target for Prisma + PostgreSQL.
+// See README "Known limitations".
+
+// Nivaran - Prisma schema
+// SQLite for local development. To move to Postgres, change the datasource
+// provider to "postgresql" and point DATABASE_URL at a Postgres instance -
+// the models below are written to be portable across both.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  ADMIN
+  TECHNICIAN
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  EMERGENCY
+}
+
+enum ComplaintStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  ASSIGNED
+  ACCEPTED
+  IN_PROGRESS
+  READY_FOR_VERIFICATION
+  RESOLVED
+  CLOSED
+  REOPENED
+  REJECTED
+}
+
+enum NotificationType {
+  COMPLAINT_SUBMITTED
+  COMPLAINT_ASSIGNED
+  STATUS_CHANGED
+  NEW_COMMENT
+  SLA_NEARING
+  SLA_OVERDUE
+  READY_FOR_VERIFICATION
+  REOPENED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role
+  phone        String?
+  isActive     Boolean  @default(true)
+  // Student-specific (nullable for other roles)
+  roomId       String?
+  room         Room?    @relation(fields: [roomId], references: [id])
+  // Technician-specific
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id])
+  available    Boolean  @default(true)
+  specialties  String?  // comma separated category slugs, technician only
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  complaintsFiled   Complaint[]      @relation("ReporterComplaints")
+  complaintsAssigned Complaint[]     @relation("AssigneeComplaints")
+  comments          Comment[]
+  attachments       Attachment[]
+  activityLogs      ActivityLog[]
+  notifications     Notification[]
+  ratings           Rating[]
+  auditLogs         AuditLog[]
+  assignments       Assignment[]
+
+  @@index([role])
+  @@index([departmentId])
+  @@index([roomId])
+}
+
+model Hostel {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  address   String?
+  blocks    Block[]
+  createdAt DateTime @default(now())
+
+  @@index([name])
+}
+
+model Block {
+  id       String  @id @default(cuid())
+  name     String
+  hostelId String
+  hostel   Hostel  @relation(fields: [hostelId], references: [id], onDelete: Cascade)
+  rooms    Room[]
+  complaints Complaint[]
+
+  @@unique([hostelId, name])
+  @@index([hostelId])
+}
+
+model Room {
+  id       String  @id @default(cuid())
+  number   String
+  floor    Int
+  blockId  String
+  block    Block   @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  students User[]
+  complaints Complaint[]
+
+  @@unique([blockId, number])
+  @@index([blockId])
+}
+
+model Department {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  description String?
+  technicians User[]
+  complaints  Complaint[]
+  createdAt   DateTime     @default(now())
+}
+
+model Category {
+  id          String        @id @default(cuid())
+  name        String        @unique
+  slug        String        @unique
+  description String?
+  complaints  Complaint[]
+  slaConfigs  SLAConfig[]
+  createdAt   DateTime      @default(now())
+}
+
+model SLAConfig {
+  id          String   @id @default(cuid())
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  priority    Priority
+  hoursToSolve Int     // hours allowed from submission to SLA deadline
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([categoryId, priority])
+}
+
+model Complaint {
+  id               String          @id @default(cuid())
+  title            String
+  description      String
+  categoryId       String
+  category         Category        @relation(fields: [categoryId], references: [id])
+  subcategory      String?
+  locationNote     String?
+  blockId          String?
+  block            Block?          @relation(fields: [blockId], references: [id])
+  roomId           String?
+  room             Room?           @relation(fields: [roomId], references: [id])
+  floor            Int?
+  priority         Priority        @default(MEDIUM)
+  status           ComplaintStatus @default(SUBMITTED)
+
+  reporterId       String
+  reporter         User            @relation("ReporterComplaints", fields: [reporterId], references: [id])
+  assigneeId       String?
+  assignee         User?           @relation("AssigneeComplaints", fields: [assigneeId], references: [id])
+  departmentId     String?
+  department       Department?     @relation(fields: [departmentId], references: [id])
+
+  slaDeadline      DateTime?
+  escalated        Boolean         @default(false)
+  resolutionDate   DateTime?
+  resolutionNotes  String?
+  rejectionReason  String?
+
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  comments         Comment[]
+  attachments      Attachment[]
+  activityLogs     ActivityLog[]
+  notifications    Notification[]
+  ratings          Rating[]
+  assignments      Assignment[]
+
+  @@index([status])
+  @@index([priority])
+  @@index([reporterId])
+  @@index([assigneeId])
+  @@index([categoryId])
+  @@index([blockId])
+  @@index([createdAt])
+  @@index([slaDeadline])
+}
+
+model Assignment {
+  id           String     @id @default(cuid())
+  complaintId  String
+  complaint    Complaint  @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  technicianId String
+  technician   User       @relation(fields: [technicianId], references: [id])
+  assignedById String?
+  status       String     @default("PENDING") // PENDING | ACCEPTED | REJECTED
+  note         String?
+  createdAt    DateTime   @default(now())
+
+  @@index([complaintId])
+  @@index([technicianId])
+}
+
+model Comment {
+  id          String    @id @default(cuid())
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  authorId    String
+  author      User      @relation(fields: [authorId], references: [id])
+  body        String
+  isInternal  Boolean   @default(false) // internal notes visible to staff only
+  createdAt   DateTime  @default(now())
+
+  @@index([complaintId])
+}
+
+model Attachment {
+  id          String    @id @default(cuid())
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  uploadedById String
+  uploadedBy  User      @relation(fields: [uploadedById], references: [id])
+  fileName    String
+  filePath    String
+  mimeType    String
+  fileSize    Int
+  kind        String    @default("EVIDENCE") // EVIDENCE (student) | RESOLUTION (technician)
+  createdAt   DateTime  @default(now())
+
+  @@index([complaintId])
+}
+
+model ActivityLog {
+  id            String    @id @default(cuid())
+  complaintId   String
+  complaint     Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User      @relation(fields: [userId], references: [id])
+  previousStatus String?
+  newStatus     String
+  comment       String?
+  createdAt     DateTime  @default(now())
+
+  @@index([complaintId])
+  @@index([createdAt])
+}
+
+model Notification {
+  id          String            @id @default(cuid())
+  userId      String
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  complaintId String?
+  complaint   Complaint?        @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  type        NotificationType
+  message     String
+  isRead      Boolean           @default(false)
+  createdAt   DateTime          @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+}
+
+model Rating {
+  id          String    @id @default(cuid())
+  complaintId String    @unique
+  complaint   Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  studentId   String
+  student     User      @relation(fields: [studentId], references: [id])
+  score       Int       // 1-5
+  feedback    String?
+  createdAt   DateTime  @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id])
+  action     String
+  entityType String
+  entityId   String?
+  metadata   String?  // JSON string
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
